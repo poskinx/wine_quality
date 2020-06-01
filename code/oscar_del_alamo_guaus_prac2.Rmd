@@ -1,0 +1,385 @@
+---
+title: "Tipologia i Cicle de Vida de les Dades"
+subtitle: "PRAC2 - Neteja i anàlisi de les dades"
+author: "Òscar del Álamo i Guaus"
+date: '`r format(Sys.Date(),"%e/%m/%Y")`'
+output:
+  pdf_document:
+    toc: yes
+    latex_engine: xelatex
+  html_document:
+    toc: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+#options(knitr.kable.NA = '')
+library(knitr)
+library(nortest)
+library(polycor)
+library(reshape2)
+library(tidyverse)
+library(caTools)
+```
+
+******
+## 1. Descripció del dataset. Perquè és important i quina pregunta/problema pretén respondre?
+******
+El dataset triat és "Wine Quality Data Set". El dataset està disponible a kaggle, en aquest [enllaç](https://www.kaggle.com/uciml/red-wine-quality-cortez-et-al-2009) o al repositori "UCI machine learning", en aquest [enllaç](https://archive.ics.uci.edu/ml/datasets/wine+quality). S'hi inclouen dos conjunts de dades relacionats amb mostres de les variants negres i blanques del vi "Vinho Verde", del nord de Portugal. Per a més detalls, consulteu: [Enllaç web](http://www.vinhoverde.pt/en/) o la referència [Cortez et al., 2009]. Per motius de de privacitat i logística, només hi ha variables fisicoquímiques (d’entrada) i sensorials (de sortida) (per exemple, no hi ha dades sobre tipus de raïm, marca de vi, preu de venda de vi, etc.).
+
+Aquests conjunts de dades es poden veure com a tasques de classificació o de regressió. Les classes estan ordenades i no equilibrades (per exemple, hi ha molts més vins normals que excel·lents o pobres). Es poden utilitzar algorismes de detecció de valors atípics per detectar els pocs vins excel·lents o pobres. A més, no estem segurs de si totes les variables d’entrada són rellevants. Així que podria ser interessant provar mètodes de selecció d'atributs.
+
+Les variables disponibles són, variables d'entrada o atributs:<br>
+1 - fixed acidity<br>
+2 - volatile acidity<br>
+3 - citric acid<br>
+4 - residual sugar<br>
+5 - chlorides<br>
+6 - free sulfur dioxide<br>
+7 - total sulfur dioxide<br>
+8 - density<br>
+9 - pH<br>
+10 - sulphates<br>
+11 - alcohol<br>
+Variable de sortida o classe:<br>
+12 - quality<br>
+
+******
+## 2. Integració i selecció de les dades d’interès a analitzar
+******
+
+```{r 2}
+# Carreguem el conjunt de dades.
+data <- read.csv(
+  "winequality-white.csv",
+  sep = ';',
+  header = TRUE,
+  stringsAsFactors = FALSE
+)
+
+# Mostrem l'estructura d'aquest.
+str(data)
+```
+Per aquesta pac, ens centrarem en l'estudi del dataset de vins blancs. Com veiem el dataset té un total de 4898 registres amb les 12 variables, comptant la qualitat, esmentades anteriorment.
+
+La classe, qualitat, és una variable quantitativa discreta, ja que només pot prendre valors enters entre 0 i 10. Els atributs, en canvi, com són el resultat de fer mesures, són variables quantitatives contínues. Veiem que R ja ha detectat aquesta diferència pel tipus de dades que hi havia a la columna del fitxer csv, int o num. Així doncs, pel tipus de dades que tenim, ens haurem de centrar en l'anàlisi quantitatiu.
+
+També està bé comentar que en aquest pas, segons el dataset que analitzem, ens podríem trobar casos amb presència d'espais en blanc en variables de tipus caràcter o trobar categories etiquetades de manera lleugerament diferent. També ens podríem trobar casos de variables numèriques on per indicar els valors decimals hi ha casos en què s'utilitza la coma i hi ha casos en què s'utilitza el punt, depenent d'on s'han pres la mesura si a Europa o a Amèrica. Tots, aquests casos els hauríem de corregir segons el que creiéssim més convenient.
+
+```{r }
+# Resum descriptiu de les dades.
+summary(data)
+```
+En aquest resum descriptiu podem alguns descriptors estadístics per tenir més informació sobre com es distribueixen les nostres dades.
+
+******
+## 3. Neteja de les dades
+******
+
+### 3.1. Les dades contenen zeros o elements buits? Com gestionaries aquests casos?
+
+A la descripció del dataset del repositori UCI ens informen que no hi ha valors nuls, però mai està de més comprovar-ho.
+
+```{r 3.1}
+colSums(is.na(data))
+```
+Com veiem no tenim elements buits. S'ha de dir que el concepte element buit pot variar en cada dataset i hauríem d'analitzar-ho cada cop tenint en compte que pot ser que els elements buits estiguin etiquetats amb un caràcter especial i llavors hauríem de buscar casos que coincideixin amb aquell caràcter enlloc de buscar elements buits.
+
+Per gestionar aquests casos hi ha diverses aproximacions. Una opció seria eliminar els registres que contenen elements buits, però amb això estaríem perdent informació. Una tècnica més freqüent és fer una imputació. Per fer-la, podem substituir els elements buits pel valor més freqüent d'aquell atribut, per  la mitja, etc. El problema de només tenir en compte el mateix atribut, a part de substituir tots els elements buits per un mateix valor, fa que la substitució pugui tenir poca concordància amb la resta d'atributs.
+
+Per tal de solucionar aquest problema, s'utilitzen mètodes d'imputació basades en els veïns més pròxims, com el kNN. Per aquesta via, la imputació té en compte les relacions que hi ha entre els atributs i, en cada cas, s'assignarà un valor diferent per substituir l'element buit.
+
+### 3.2. Identificació i tractament de valors extrems.
+
+Teòricament considerem els valors extrems aquells que tenen un z-score > 3. El z-score ens indica a quantes desviacions estàndard està un valor respecte la mitja del conjunt. Per tal d'identificar els valors extrems, el diagrama de caixa és el què ens permet detectar-los de manera més fàcil. També utilitzem l'histograma per veure més clarament amb quina freqüència es distribueixen els diferents valors atributs. Per cada atribut, també veiem quina quantitat de registres tenen valors considerats extrems seguint la teoria esmentada abans.
+```{r 3.2.1}
+atributs = colnames(data)[1:11]
+
+for (atribut in colnames(data)){
+  par(
+    mfrow=c(1,2),
+    oma = c(0, 0, 2, 0)
+  )
+  hist(
+    data[,atribut],
+    xlab=paste("valors"),
+    main="Histograma",
+    prob=T,
+    col="grey85"
+  )
+  curve(
+    dnorm(
+      x,
+      mean=mean(data[,atribut]),
+      sd=sd(data[,atribut])
+    ),
+    col="darkblue",
+    lwd=2,
+    add=TRUE
+  )
+  boxplot(
+    data[,atribut],
+    main="Diagrama de caixa"
+  )
+  mtext(
+    paste("Atribut analitzat: ",atribut),
+    outer = TRUE,
+    cex = 1.5
+  )
+  teorics <- length(data[,atribut][which(abs(scale(data[,atribut]))>3)])
+  box_out <- length(boxplot.stats(data[, atribut])$out)
+  print(
+    paste(
+      "Nombre de valors extrems: ",
+      teorics,
+      " de teòrics i ",
+      box_out,
+      " segons la funció boxplot.stats."
+    )
+  )
+}
+```
+
+Veient els resultats de les gràfiques, hem de considerar per cada tipus atribut com tractem els valors extrems.L'atribut alcohol no mostra valors extrems. Pel que fa a l'atribut pH, veiem que tots els valors estan dintre del rang (0, 7) que ens indica acidesa, de manera que podria considerar-se la opció de manternir els valors extrems si ho consideressim necessari. Per acabar de decidir, també podem veure si realment hi ha algun atribut que tingui valors extrems on la distribució de la qualitat del vi sigui molt clara. Per exemple, que els valors extrems del pH facin qe un vi sigui de millor qualitat.
+
+```{r 3.2.2, echo=FALSE}
+atributs = colnames(data)[1:10]
+print("Histogrames de distribució de la qualitat del vi")
+print("En funció de les mostres amb valors extrems de cada atribut")
+par(mfrow=c(2,5))
+for (atribut in atributs){
+  hist(
+    data[,"quality"][which(abs(scale(data[,atribut]))>3)],
+    xlab=paste("quality values"),
+    main=paste(atribut),
+    col="grey85"
+  )
+}
+```
+
+
+Com s'aprecia a les gràfiques els valors extrems no són determinants pel que fa a la qualitat del vi, de manera que es poden corregir utilitzant la seva mitjana i només ho aplicarem en els casos con el z-score sigui un valor més gran que 3, tant el cas de desviacions positives com negatives.
+
+
+```{r 3.2.3}
+atributs = colnames(data)[1:10]
+par(mfrow=c(2,5))
+data$pH[which(abs(scale(data$pH))>3)] <- mean(data$pH)
+data$sulphates[which(abs(scale(data$sulphates))>3)] <- mean(data$sulphates)
+for (atribut in atributs){
+  data[,atribut][which(abs(scale(data[,atribut]))>3)] <- mean(data[,atribut])
+  boxplot(
+    data[,atribut],
+    main=paste(atribut),
+    col="grey85"
+  )
+}
+```
+
+******
+## 4. Anàlisi de les dades
+******
+
+### 4.1.Selecció dels grups de dades que es volen analitzar/comparar (planificació dels anàlisis a aplicar).
+
+En aquesta secció, depenent dels anàlisis a realitzar, es poden utilitzar mètodes de reducció de dimensionalitat com el PCA o el t-SNE i també mètodes de de feature engineering, per a partir dels atributs inicials, calcular-ne d'altres aprofitant el coneixament del camp que s'està estudiant. També es poden aplicar mètodes de clustering per reduir el nombre de registres a entrenar.
+
+En el nostre cas, com no tenim un nombre d'atributs molt gran i el nombre de mostres és de 5k aproximadament, d'entrada no ens caldria aplicar aquests mètodes. Si més no, si que separarem el conjunt de dades en 2 datasets, un de train i un de test per tal de mirar d'entrenar un model de regressió lineal i validar-ne els resultats. I també crearem una variable nova agrupant els vins segons la puntuació. Per una qualitat >5 l'etiqueta d'aquesta nova variable serà "Good Quality" i en cas contrari "Poor Quality". Això ho farem servir per fer un contrast d'hipòtesis a l'apartat 4.3.
+
+```{r 4.1}
+# Fixem el random seed perquè la partició sigui reproduible.
+set.seed(340)
+mostres = sample.split(data$quality, SplitRatio = 0.75)
+data_train = subset(data, mostres == TRUE)
+data_test = subset(data, mostres == FALSE)
+table(data_train$quality)
+table(data_test$quality)
+
+# Creem la nova variable segons la puntuació de la qualitat.
+data$qualitat_categorica <- ifelse(data$quality > 5, "Good Quality", "Poor Quality")
+table(data$qualitat_categorica)
+```
+
+### 4.2. Comprovació de la normalitat i homogeneïtat de la variància.
+Podem comprovar la normalitat de manera visual i amb tests de normalitat. Per fer-ho de manera visual es poden utilitzar histogrames, com hem fet a la secció anterior, i també les gràfiques Q-Q.
+
+Per realitzar els tests de normalitat, utilitzarem Shapiro-Wilk i Anderson-Darling, per veure si hi ha alguna diferència entre els resultats. Ambdós tenen com a hipòtesis nuŀla, $\H_0$, que el conjunt té una distribució normal, de manera que si el p-value resultant és: $p-value > \alpha = 0.5$ no podrem rebutjar $\H_0$ i assumirem normalitat. En cas contrari, $p-value < \alpha = 0.5$ rebutjarem $\H_0$, per tan, rebutjarem normalitat.
+
+```{r 4.2}
+atributs = colnames(data)[1:11]
+par(mfrow=c(3,4))
+for (atribut in atributs){
+  qqnorm(data[,atribut], main=paste(atribut), col="grey85")
+  qqline(data[,atribut], lwd=2)
+}
+
+for (atribut in atributs){
+  print(paste(atribut))
+  print(ad.test(data[,atribut])$p.value)
+  print(shapiro.test(data[,atribut])$p.value)
+}
+```
+
+Mirant els resultats de les gràfiques Q-Q, veiem que les corbes de la majoria de les variables s'aproximen força a la recta de quantils teòrica, de totes maneres a partir de la inspecció visual no podem acabar de determinar normalitat.
+
+A partir dels resultats del test veiem que el p-value és inferior al nostre coeficient alfa, que és 0.05. Així doncs podem rebutjar la hipòtesi nuŀla i entenem que no segueixen una distribució normal. No obstant, com tenim més de 30 mostres podem aproximar les variables com una distribució normal de mitja 0 i desviació estàndar 1 pel teorema del límit central.
+
+### 4.3. Aplicació de proves estadístiques per comparar els grups de dades. En funció de les dades i de l’objectiu de l’estudi, aplicar proves de contrast d’hipòtesis, correlacions, regressions, etc. Aplicar almenys tres mètodes d’anàlisi diferents.
+
+#### Test de comparació de dues mitjanes
+
+Es vol investigar si els vins amb una qualitat del tipus "Good Quality" tenen en mitjana un graduació d'alcohol que supera amb més de 0.9 graus la graduació dels vins del tipus "Bad Quality". El nivell de confiança establert per la hipòtesis és del 98%.
+
+Es tract d'un contrast de dues mostres independents, ja que es vol comparar la mitjana segons el tipus de qualitat i les dades s'han obtingut de manera independent per cada vi.
+
+Tenint en compte que $\mu_1$ representa la mitjana de la distribució normal dels vins que tenen "Good Quality" i $\mu_2$ dels que tenen "Poor Quality":
+- La hipòtesi nuŀla serà: $H_0 : \mu_1 = \mu_2$
+- La hipòtesi alternativa serà bilateral: $H_1 : \mu_1 - \mu_2 > 0.9$
+
+Podem aplicar un test paramètric:
+```{r contrast_hipotesis}
+good_wines <- data[which(data$qualitat_categorica=="Good Quality"), c("alcohol")]
+summary(good_wines)
+
+bad_wines <- data[which(data$qualitat_categorica=="Poor Quality"), c("alcohol")]
+summary(bad_wines)
+
+wilcox.test(good_wines, bad_wines,  mu=0.9, alternative='greater', paired=FALSE, conf.int=0.98)
+
+```
+El test no paramètric ens confirma la hipòtesi alternativa, on la mitja de la graduació d'alcohol dels vins amb "Good Quality" és més gran de 0.9 graus que la dels vins amb "Poor Quality".
+
+#### Correlacions entre els atributs
+Calculem les correlacions entre totes les nostres columnes quantitatives:
+```{r correlacio}
+matriu_correlacions <- hetcor(data[1:12], ML=FALSE, std.err=FALSE)
+matriu_correlacions$correlations
+```
+
+Aquí podem observar que hi ha atributs que tenen una correlació molt alta, com la "density" amb el "residual.sugar" o el "total.sulfur.dioxide" amb el "free.sulfur.dioxide". Si necessitem reduir atributs, podríem eliminar-ne un de cada parella.
+
+També s'observa que la qualitat té una forta correlació amb l'alcohol i una mica menys forta amb el pH.
+
+#### Model de regressió lineal múltiple
+Volem crear un model lineal que expliqui la variable quality en funció de l’alcohol i el pH del vi.
+
+Per fer-ho veure'm tres models amb diferents atributs que tenen una correlació alta amb la puntuació de la qualitat.
+```{r regressio_lineal}
+model1 = lm(quality ~ alcohol + sulphates + pH + free.sulfur.dioxide + citric.acid, data=data_train)
+summary(model1)
+
+model2 = lm(quality ~ alcohol + sulphates + pH + citric.acid, data=data_train)
+summary(model2)
+
+model3 = lm(quality ~ alcohol + pH + citric.acid, data=data_train)
+summary(model3)
+
+model4 = lm(quality ~ alcohol + pH, data=data_train)
+summary(model4)
+
+
+```
+
+El model que ens ha donat millors resultats és el model4, on només fem servir els dos atributs amb una correlació més alta amb la qualitat, l'alchohol i el pH.
+```{r millor_model}
+coef(model4)
+```
+
+Com es veu al resum del model, la nostra recta per predir la qualitat quedaria així:
+$y = \beta_0 + \beta_1x_1 + \beta_2x_2$ amb $\beta_0 = 1.4298524$, $\beta_1 = 0.2986307$ i $\beta_2 = 0.4114162$
+
+El coeficient $R^2 = 0.801$. És a dir, en un principi el model explica el 80,1% de la variancia de les mostres.
+
+Quan els valors de les variables explicatives valen zero, el valor de la qualitat predit és 1.4298524. L'efecte que tenen les variables explicatives es dedueix dels valors que les acompanyen. L'alcohol augmenta el valor predit en $\beta_1$ per cada unitat. El pH té una rellevància una mica superior i, com que $beta_2$ és positiva, contribueix a augmentar el valor predit.
+
+
+```{r prediccio}
+pred = predict(model3, newdata=data_test)
+
+actuals_preds <- data.frame(cbind(actuals=data_test$quality, predicteds=pred))
+head(actuals_preds)
+
+# min_max precisió
+mean(apply(actuals_preds, 1, min) / apply(actuals_preds, 1, max))
+
+# desviació percentual mitjana absoluta
+mean(abs((actuals_preds$predicteds - actuals_preds$actuals))/actuals_preds$actuals)  
+```
+
+
+******
+## 5. Representació dels resultats a partir de taules i gràfiques.
+******
+
+Durant tota la pràctica els anàlisis han anat acompanyats de gràfiques, però apart també en podem afegir algunes de noves.
+
+Per exemple, els resultats dels tests de normalitat en format taula:
+```{r 5.taula}
+sw_p_value <- function(aux){
+  return(shapiro.test(aux)$p.value)
+}
+ad_p_value <- function(aux){
+  return(ad.test(aux)$p.value)
+}
+Shapiro_Wilk_results <- c(as.vector(sapply(data[1:12], sw_p_value)))
+Anderson_Darling_results <- c(as.vector(sapply(data[1:12], ad_p_value)))
+
+data.frame(
+  variables=colnames(data)[1:12],
+  Shapiro_Wilk_results,
+  Anderson_Darling_results
+  )
+```
+
+També podem veure,a través d'un heatmap, la taula de correlacions de les columnes quantitaves del nostre dataset.
+```{r}
+ggplot(
+  melt(matriu_correlacions$correlations),
+  aes(Var2, Var1, fill=value)
+)+
+geom_tile(color="white")+
+scale_fill_gradient2(
+  low = "blue",
+  mid = "white",
+  high = "red",
+  midpoint = 0,
+  limit = c(-1, 1),
+  name = "Correlacions"
+)+
+theme_minimal()+
+theme(
+  axis.text.x = element_text(
+    angle=45, vjust=1, size=10, hjust=1
+  )
+)+
+coord_fixed()
+
+```
+
+La visualització dels resultats del model4 en funció de diferents paràmetres:
+```{r resultat_model}
+layout(matrix(c(1,2,3,4),2,2))
+plot(model4)
+```
+
+******
+## 6. Resolució del problema. A partir dels resultats obtinguts, quines són les conclusions? Els resultats permeten respondre al problema?
+******
+
+Al llarg d'aquest pràctica s'ha analitzat el conjunt de dades de vins blancs del dataset "Wine Quality Data Set". S'ha comprovat que no hi ha errors de format en el dataset ni elements buits i s'han vist descriptors estadístics genèrics. També s'ha explicat com es gestionarien els elements buits o els possibles errors de format.
+
+A més, a la secció de selecció de dades s'ha explicat com es procediria, en cas que fos necessari, a reduir el nombre d'atributs o el nombre de mostres del conjunt.
+
+Durant l'anàlisi hem pogut comprovar que no hi ha un patró clar que indiqui que la qualitat del vi depèn del valors extrems dels diferents atributs fisicoquímics obtinguts de cada vi. 
+
+A partir del contrast de la mitjana de l'alcohol entre les mostres de vins amb una qualitat superior a 5 i una qualitat inferior a 5, s'ha pogut comprovar que, amb una confiança del 98%, els vins de millor qualitat tenen una graduació d'alcohol 0.9 graus superior de mitja respecte els vins de pitjor qualitat.
+
+A través de les correlacions entre les diferents variables hem vist que n'hi ha dues parelles que podrien ser considerades suplementàries de manera que se'n podria eliminar una variable de cada parell.
+
+També s'han provat de realitzar diferents models de regressió lineal múltiple amb diferents atributs, i s'ha vist que el model que funció millor per explicar la qualitat és el que depèn de la graduació d'alcohol i del pH del vi.
+
+******
+## 7. Codi: Cal adjuntar el codi, preferiblement en R, amb el que s’ha realitzat la neteja, anàlisi i representació de les dades. Si ho preferiu, també podeu treballar en Python.
+******
+
+El codi es pot trobar a GitHub al següent enllaç: https://github.com/poskinx/wine_quality.
